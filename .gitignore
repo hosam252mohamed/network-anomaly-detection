@@ -8,13 +8,6 @@ venv/
 env/
 .env
 
-# Data files (too large for git)
-data/raw/
-*.csv
-
-# Models (can be regenerated)
-models/*.joblib
-
 # IDE
 .vscode/
 .idea/
