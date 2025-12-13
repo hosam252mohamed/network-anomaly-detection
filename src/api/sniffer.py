@@ -1,10 +1,13 @@
 """
 API routes for real-time sniffing controls.
+Optimized for high-traffic scenarios with rate limiting and async ML.
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Dict, List
 import time
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import random
 
 from ..sniffing.sniffer import SnifferService
 from ..api.routes import detect_anomalies
@@ -15,6 +18,14 @@ router = APIRouter()
 
 # Global sniffer instance
 sniffer = SnifferService()
+
+# Thread pool for running ML detection without blocking
+ml_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ml_detect")
+
+# Rate limiting for heavy traffic
+MAX_FLOWS_PER_REQUEST = 50  # Sample if more than this many flows
+ML_DETECTION_TIMEOUT = 2.0  # Maximum seconds for ML detection
+
 
 @router.post("/sniffer/start")
 async def start_sniffer(interface: str = None):
@@ -39,21 +50,30 @@ async def get_sniffer_status():
     """Get current status and stats."""
     return {
         "is_running": sniffer.is_running,
-        "packets_captured": sniffer.stats["packets_captured"],
-        "active_flows": sniffer.stats["active_flows"],
-        "packets_dropped": sniffer.stats.get("packets_dropped", 0)
+        "packets_captured": sniffer.stats.get("packets_captured", 0),
+        "packets_seen": sniffer.stats.get("packets_seen", 0),
+        "active_flows": sniffer.stats.get("active_flows", 0),
+        "packets_dropped": sniffer.stats.get("packets_dropped", 0),
+        "sample_rate": sniffer.stats.get("sample_rate", 1),
+        "mode": sniffer.stats.get("mode", "normal")
     }
 
 @router.get("/sniffer/latest")
 async def get_latest_traffic():
     """
     Get latest flows, classify them, and return results.
-    This effectively polls for real-time updates.
+    Optimized with sampling and timeout protection for heavy traffic.
     """
     raw_flows = sniffer.get_flows(timeout_seconds=2.0)
     
     if not raw_flows:
         return {"flows": []}
+    
+    # Rate limit: sample flows if too many (during heavy attacks)
+    original_count = len(raw_flows)
+    if len(raw_flows) > MAX_FLOWS_PER_REQUEST:
+        # Keep a random sample to avoid overwhelming ML
+        raw_flows = random.sample(raw_flows, MAX_FLOWS_PER_REQUEST)
         
     # Convert to Pydantic models
     flow_objects = []
@@ -79,20 +99,34 @@ async def get_latest_traffic():
         
     # Import rules
     from ..api.rules import check_rules, rules
+    
+    # Check if we're in heavy traffic mode - skip ML for speed
+    is_heavy_traffic = sniffer.stats.get("mode") == "heavy_traffic"
         
-    # Run detection
+    # Run detection with timeout protection
     try:
         merged_results = []
         
-        # Optionally run ML detection
+        # Run ML detection ONLY if:
+        # 1. ML is enabled
+        # 2. We have flows to process
+        # 3. We are NOT in heavy traffic mode (ML is too slow during floods)
         ml_results = None
-        if rules.use_ml_detection:
+        if rules.use_ml_detection and flow_objects and not is_heavy_traffic:
             try:
                 request = DetectionRequest(flows=flow_objects, method=DetectionMethod.COMBINED)
-                detection_result = await detect_anomalies(request)
+                # Use wait_for with timeout to prevent blocking
+                detection_result = await asyncio.wait_for(
+                    detect_anomalies(request),
+                    timeout=ML_DETECTION_TIMEOUT
+                )
                 ml_results = detection_result.results
+            except asyncio.TimeoutError:
+                # ML took too long, continue with rule-based only
+                pass
             except Exception as e:
-                pass  # ML failed, continue with rule-based only
+                # ML failed, continue with rule-based only
+                pass
         
         for i, flow_meta in enumerate(raw_flows):
             # Get ML result if available
@@ -160,10 +194,11 @@ async def get_latest_traffic():
                 "attack_type": attack_type,
                 "severity": severity,
                 "detection_method": "rule" if rule_check["is_anomaly"] else ("ml" if ml_is_anomaly else "none"),
-                "recommendation": "Block IP" if is_anomaly else "Monitor"
+                "recommendation": "Block IP" if is_anomaly else "Monitor",
+                "sampled": original_count > MAX_FLOWS_PER_REQUEST  # Indicate if sampling occurred
             })
             
-        return {"flows": merged_results}
+        return {"flows": merged_results, "sampled_from": original_count if original_count > MAX_FLOWS_PER_REQUEST else None}
         
     except Exception as e:
         return {"error": str(e), "flows": []}

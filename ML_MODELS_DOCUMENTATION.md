@@ -33,13 +33,18 @@ This document provides complete technical documentation of the machine learning 
 | **Anomaly Detection** | Statistical (Z-score/IQR) + Isolation Forest | Binary anomaly detection |
 | **Classification** | Random Forest Classifier | Multi-class attack type identification |
 
-### Model Performance Summary
+### Model Performance Summary (Real Evaluation Results)
 
-| Model | Accuracy | Training Data | Use Case |
-|-------|----------|---------------|----------|
-| Statistical Detector | ~65-75% | Normal traffic only | Fast baseline detection |
-| Isolation Forest | ~75-85% | Normal traffic only | ML-based anomaly detection |
-| Attack Classifier | ~92-98% | All labeled traffic | Attack type identification |
+> **Evaluated on:** 100,000 samples from CICIDS2017 dataset  
+> **Test set:** 20,000 samples (80/20 stratified split)  
+> **Evaluation date:** December 10, 2025
+
+| Model | Accuracy | Precision | Recall | F1 Score | Training Data |
+|-------|----------|-----------|--------|----------|---------------|
+| Statistical Detector (Z-score) | **76.71%** | 42.14% | 48.29% | 45.01% | Normal traffic only (64,210 samples) |
+| Isolation Forest | **80.97%** | 52.05% | 45.07% | 48.31% | Normal traffic only (64,210 samples) |
+| Combined (Statistical OR IF) | **76.54%** | 41.83% | 48.29% | 44.83% | - |
+| Attack Classifier | **98.35%** | 98.31% (weighted) | 98.35% | 98.30% | All labeled traffic (80,000 samples) |
 
 ---
 
@@ -156,72 +161,512 @@ Features were selected based on three criteria:
 2. **Extractability** - Must be computable from raw network packets in real-time
 3. **Distinctiveness** - Features that differ significantly between attack and normal traffic
 
-### 3.3 The 15 Selected Features
+### 3.3 The 15 Selected Features - Complete Mathematical Reference
 
-#### Category 1: Flow Timing Features (3 features)
+---
 
-| Feature | Unit | Description | Why Selected |
-|---------|------|-------------|--------------|
-| **Flow Duration** | μs (microseconds) | Total duration of the flow | DDoS/DoS attacks have unusual durations |
-| **Flow IAT Mean** | μs | Mean Inter-Arrival Time between packets | Attack tools create regular patterns |
-| **Fwd IAT Mean** | μs | Mean IAT for forward direction packets | Brute force attacks show distinct timing |
-| **Bwd IAT Mean** | μs | Mean IAT for backward direction packets | DoS responses have timing anomalies |
+## CATEGORY 1: Flow Timing Features (4 features)
 
-#### Category 2: Packet Count Features (2 features)
+### Feature 1: Flow Duration
 
-| Feature | Unit | Description | Why Selected |
-|---------|------|-------------|--------------|
-| **Total Fwd Packets** | count | Number of packets from source to destination | Port scans have many outgoing packets |
-| **Total Backward Packets** | count | Number of packets from destination to source | DDoS has asymmetric packet ratios |
+**Definition:** Total time elapsed from the first packet to the last packet in a network flow.
 
-#### Category 3: Flow Rate Features (2 features)
+**Formula:**
+```
+Flow Duration = t_last - t_first
+```
 
-| Feature | Unit | Description | Why Selected |
-|---------|------|-------------|--------------|
-| **Flow Bytes/s** | bytes/sec | Byte transfer rate | DDoS attacks show high byte rates |
-| **Flow Packets/s** | packets/sec | Packet transfer rate | Port scans have high packet rates |
+Where:
+- `t_first` = Timestamp of the first packet in the flow
+- `t_last` = Timestamp of the last packet in the flow
 
-#### Category 4: Packet Size Features (4 features)
+**Unit:** Microseconds (μs)
 
-| Feature | Unit | Description | Why Selected |
-|---------|------|-------------|--------------|
-| **Fwd Packet Length Mean** | bytes | Average forward packet size | Attack tools use consistent sizes |
-| **Bwd Packet Length Mean** | bytes | Average backward packet size | Server responses have patterns |
-| **Packet Length Variance** | bytes² | Variance in packet sizes | Attacks often have low variance |
-| **Average Packet Size** | bytes | Overall mean packet size | Different attack profiles |
+**Calculation in Code:**
+```python
+start_time = packets[0].time          # First packet timestamp
+end_time = packets[-1].time           # Last packet timestamp
+duration = end_time - start_time      # Duration in seconds
+duration_micros = duration * 1_000_000  # Convert to microseconds
+```
 
-#### Category 5: TCP Flag Features (3 features)
+**Example:**
+```
+First packet:  10:00:00.000000
+Last packet:   10:00:00.500000
+Flow Duration = 0.5 seconds = 500,000 μs
+```
 
-| Feature | Unit | Description | Why Selected |
-|---------|------|-------------|--------------|
-| **Fwd PSH Flags** | count | PSH flags in forward packets | Web attacks show PSH patterns |
-| **SYN Flag Count** | count | Number of SYN flags | Port scans = many SYN packets |
-| **ACK Flag Count** | count | Number of ACK flags | Normal traffic has ACK responses |
+**Attack Detection Significance:**
+| Attack Type | Typical Duration |
+|-------------|------------------|
+| SYN Flood | Very short (< 1ms per connection) |
+| Slowloris | Extremely long (minutes to hours) |
+| Normal HTTP | Medium (100ms - 5s) |
+| Port Scan | Very short (< 100ms per probe) |
 
-### 3.4 Feature Importance Analysis
+---
 
-Based on trained Random Forest model:
+### Feature 2: Flow IAT Mean (Inter-Arrival Time)
+
+**Definition:** Average time between consecutive packets in the entire flow, regardless of direction.
+
+**Formula:**
+```
+                    n-1
+                    Σ (t[i+1] - t[i])
+                   i=1
+Flow IAT Mean = ────────────────────
+                      n - 1
+```
+
+Where:
+- `n` = Total number of packets in the flow
+- `t[i]` = Timestamp of packet i
+
+**Unit:** Microseconds (μs)
+
+**Calculation in Code:**
+```python
+flow_iats = []
+last_time = packets[0].time
+
+for i, pkt in enumerate(packets[1:], 1):
+    iat = pkt.time - last_time
+    flow_iats.append(iat)
+    last_time = pkt.time
+
+flow_iat_mean = np.mean(flow_iats) * 1_000_000  # Convert to μs
+```
+
+**Example:**
+```
+Packet times: [0.000, 0.100, 0.150, 0.300]
+IATs:         [0.100, 0.050, 0.150]
+Flow IAT Mean = (0.100 + 0.050 + 0.150) / 3 = 0.100 sec = 100,000 μs
+```
+
+**Attack Detection Significance:**
+| Traffic Type | IAT Pattern |
+|--------------|-------------|
+| Normal browsing | Irregular, human-paced |
+| Bot/Script | Very regular, automated |
+| DDoS flood | Extremely low IAT (< 1ms) |
+| Slowloris | Very high IAT (seconds) |
+
+---
+
+### Feature 3: Fwd IAT Mean (Forward Inter-Arrival Time)
+
+**Definition:** Average time between consecutive packets traveling from source to destination only.
+
+**Formula:**
+```
+                       n_fwd-1
+                         Σ (t_fwd[i+1] - t_fwd[i])
+                        i=1
+Fwd IAT Mean = ─────────────────────────────────
+                         n_fwd - 1
+```
+
+Where:
+- `n_fwd` = Number of forward packets
+- `t_fwd[i]` = Timestamp of forward packet i
+
+**Unit:** Microseconds (μs)
+
+**Calculation in Code:**
+```python
+fwd_iats = []
+last_fwd_time = 0
+src_ip_fwd = packets[0][IP].src  # First packet defines "forward" direction
+
+for pkt in packets:
+    if pkt[IP].src == src_ip_fwd:  # Forward direction
+        if last_fwd_time > 0:
+            fwd_iats.append(pkt.time - last_fwd_time)
+        last_fwd_time = pkt.time
+
+fwd_iat_mean = np.mean(fwd_iats) * 1_000_000  # Convert to μs
+```
+
+**Attack Detection Significance:**
+- **Brute Force:** Very regular Fwd IAT (automated login attempts)
+- **Normal user:** Irregular Fwd IAT (typing, clicking)
+
+---
+
+### Feature 4: Bwd IAT Mean (Backward Inter-Arrival Time)
+
+**Definition:** Average time between consecutive packets traveling from destination back to source.
+
+**Formula:**
+```
+                       n_bwd-1
+                         Σ (t_bwd[i+1] - t_bwd[i])
+                        i=1
+Bwd IAT Mean = ─────────────────────────────────
+                         n_bwd - 1
+```
+
+**Unit:** Microseconds (μs)
+
+**Attack Detection Significance:**
+- **DoS victim:** No backward packets (server overwhelmed)
+- **Normal:** Regular responses from server
+
+---
+
+## CATEGORY 2: Packet Count Features (2 features)
+
+### Feature 5: Total Fwd Packets
+
+**Definition:** Count of all packets traveling from source IP to destination IP.
+
+**Formula:**
+```
+Total Fwd Packets = Σ 1, for each packet where packet.src_ip == flow.src_ip
+```
+
+**Unit:** Count (integer)
+
+**Calculation in Code:**
+```python
+fwd_pkts = 0
+src_ip_fwd = packets[0][IP].src  # First packet determines forward direction
+
+for pkt in packets:
+    if pkt[IP].src == src_ip_fwd:
+        fwd_pkts += 1
+```
+
+**Attack Detection Significance:**
+| Attack Type | Fwd Packets Pattern |
+|-------------|---------------------|
+| Port Scan | Many (1 per port probed) |
+| SYN Flood | Extremely high |
+| Normal HTTP | Moderate (10-50) |
+
+---
+
+### Feature 6: Total Backward Packets
+
+**Definition:** Count of all packets traveling from destination back to source.
+
+**Formula:**
+```
+Total Bwd Packets = Total Packets - Total Fwd Packets
+```
+
+**Unit:** Count (integer)
+
+**Attack Detection Significance:**
+- **DDoS:** Fwd >> Bwd (asymmetric, server can't respond)
+- **Normal:** Fwd ≈ Bwd (request-response balance)
+- **Port Scan:** Few Bwd packets (RST or no response)
+
+---
+
+## CATEGORY 3: Flow Rate Features (2 features)
+
+### Feature 7: Flow Bytes/s
+
+**Definition:** Total bytes transferred per second during the flow.
+
+**Formula:**
+```
+                    Total Bytes Fwd + Total Bytes Bwd
+Flow Bytes/s = ─────────────────────────────────────────
+                         Flow Duration (seconds)
+```
+
+**Unit:** Bytes per second
+
+**Calculation in Code:**
+```python
+fwd_len_sum = sum(len(pkt) for pkt in packets if pkt[IP].src == src_ip_fwd)
+bwd_len_sum = sum(len(pkt) for pkt in packets if pkt[IP].src != src_ip_fwd)
+total_bytes = fwd_len_sum + bwd_len_sum
+
+flow_bytes_per_sec = total_bytes / duration  # duration in seconds
+```
+
+**Example:**
+```
+Total bytes: 50,000 bytes
+Duration: 0.5 seconds
+Flow Bytes/s = 50,000 / 0.5 = 100,000 bytes/s = 100 KB/s
+```
+
+**Attack Detection Significance:**
+| Traffic Type | Typical Bytes/s |
+|--------------|-----------------|
+| Normal web browsing | 10-500 KB/s |
+| Video streaming | 1-10 MB/s |
+| DDoS attack | 10+ MB/s |
+| Port scan | Low (small probes) |
+
+---
+
+### Feature 8: Flow Packets/s
+
+**Definition:** Number of packets transmitted per second during the flow.
+
+**Formula:**
+```
+                         Total Packets
+Flow Packets/s = ────────────────────────
+                    Flow Duration (seconds)
+```
+
+**Unit:** Packets per second
+
+**Calculation in Code:**
+```python
+flow_packets_per_sec = len(packets) / duration
+```
+
+**Attack Detection Significance:**
+| Traffic Type | Packets/s |
+|--------------|-----------|
+| Normal TCP | 10-100 pps |
+| Port Scan | 100-1000 pps |
+| SYN Flood | 1000+ pps |
+| DDoS | 10,000+ pps |
+
+---
+
+## CATEGORY 4: Packet Size Features (4 features)
+
+### Feature 9: Fwd Packet Length Mean
+
+**Definition:** Average size (in bytes) of packets sent from source to destination.
+
+**Formula:**
+```
+                              Σ len(fwd_packet[i])
+Fwd Packet Length Mean = ─────────────────────────
+                              n_fwd
+```
+
+Where:
+- `len(fwd_packet[i])` = Size of forward packet i in bytes
+- `n_fwd` = Total number of forward packets
+
+**Unit:** Bytes
+
+**Calculation in Code:**
+```python
+fwd_lens = [len(pkt) for pkt in packets if pkt[IP].src == src_ip_fwd]
+fwd_len_mean = np.mean(fwd_lens) if fwd_lens else 0
+```
+
+**Attack Detection Significance:**
+- **Attack tools:** Consistent packet sizes (low variance)
+- **Normal traffic:** Variable sizes (different content)
+
+---
+
+### Feature 10: Bwd Packet Length Mean
+
+**Definition:** Average size (in bytes) of packets sent from destination back to source.
+
+**Formula:**
+```
+                              Σ len(bwd_packet[i])
+Bwd Packet Length Mean = ─────────────────────────
+                              n_bwd
+```
+
+---
+
+### Feature 11: Packet Length Variance
+
+**Definition:** Statistical variance of all packet sizes in the flow. Measures how much packet sizes differ from each other.
+
+**Formula:**
+```
+                          Σ (len[i] - μ)²
+Variance (σ²) = ────────────────────────
+                          n
+```
+
+Where:
+- `len[i]` = Size of packet i
+- `μ` = Mean packet size (Average Packet Size)
+- `n` = Total number of packets
+
+**Unit:** Bytes² (squared bytes)
+
+**Calculation in Code:**
+```python
+pkt_sizes = [len(pkt) for pkt in packets]
+variance = np.var(pkt_sizes) if pkt_sizes else 0
+```
+
+**Example:**
+```
+Packet sizes: [100, 100, 100, 100]  → Variance = 0 (identical)
+Packet sizes: [50, 100, 150, 200]  → Variance = 2500 (variable)
+```
+
+**Attack Detection Significance:**
+| Traffic Type | Variance |
+|--------------|----------|
+| Attack tool (scripted) | **Low** (consistent packet sizes) |
+| Normal human traffic | **High** (different requests/responses) |
+| SYN flood | **Very low** (all SYN packets same size) |
+
+> **Key Insight:** This is the #1 most important feature (16.4% importance). Automated attacks have suspiciously low variance!
+
+---
+
+### Feature 12: Average Packet Size
+
+**Definition:** Mean size of all packets in the flow.
+
+**Formula:**
+```
+                         Σ len(packet[i])
+Average Packet Size = ────────────────────
+                              n
+```
+
+**Unit:** Bytes
+
+**Calculation in Code:**
+```python
+pkt_sizes = [len(pkt) for pkt in packets]
+avg_size = np.mean(pkt_sizes) if pkt_sizes else 0
+```
+
+---
+
+## CATEGORY 5: TCP Flag Features (3 features)
+
+### Feature 13: Fwd PSH Flags
+
+**Definition:** Count of TCP PUSH flags in forward direction packets.
+
+**What is PSH flag?**
+The TCP PSH (Push) flag tells the receiving end to push data to the application immediately, rather than buffering it.
+
+**Formula:**
+```
+Fwd PSH Flags = Σ 1, for each fwd packet where TCP.flags contains 'P'
+```
+
+**Unit:** Count
+
+**Calculation in Code:**
+```python
+fwd_psh_flags = 0
+for pkt in packets:
+    if pkt[IP].src == src_ip_fwd and TCP in pkt:
+        if 'P' in pkt[TCP].flags:
+            fwd_psh_flags += 1
+```
+
+**Attack Detection Significance:**
+- **Web attacks:** High PSH count (pushing HTTP requests)
+- **Normal browsing:** Moderate PSH count
+
+---
+
+### Feature 14: SYN Flag Count
+
+**Definition:** Total number of TCP SYN flags in all packets of the flow.
+
+**What is SYN flag?**
+The TCP SYN (Synchronize) flag is used to initiate a TCP connection (first step of 3-way handshake).
+
+**Formula:**
+```
+SYN Flag Count = Σ 1, for each packet where TCP.flags contains 'S'
+```
+
+**Unit:** Count
+
+**Calculation in Code:**
+```python
+syn_flags = 0
+for pkt in packets:
+    if TCP in pkt and 'S' in pkt[TCP].flags:
+        syn_flags += 1
+```
+
+**Attack Detection Significance:**
+| Traffic Type | SYN Count |
+|--------------|-----------|
+| Normal connection | 1-2 (one handshake) |
+| Port scan | Many (1 per port) |
+| SYN flood | Extremely high |
+
+---
+
+### Feature 15: ACK Flag Count
+
+**Definition:** Total number of TCP ACK flags in all packets of the flow.
+
+**What is ACK flag?**
+The TCP ACK (Acknowledge) flag confirms receipt of data. Normal TCP connections have ACK in most packets.
+
+**Formula:**
+```
+ACK Flag Count = Σ 1, for each packet where TCP.flags contains 'A'
+```
+
+**Unit:** Count
+
+**Attack Detection Significance:**
+- **Normal traffic:** High ACK count (every response has ACK)
+- **SYN flood:** Low ACK count (no handshake completion)
+- **Ratio indicator:** `SYN / ACK ratio` high = potential attack
+
+### 3.4 Feature Importance Analysis (Real Data from Training)
+
+Based on our trained Random Forest model (evaluated December 10, 2025):
+
+| Rank | Feature | Importance Score |
+|------|---------|-----------------|
+| 1 | **Packet Length Variance** | 0.1640 (16.40%) |
+| 2 | **Bwd Packet Length Mean** | 0.1321 (13.21%) |
+| 3 | **Average Packet Size** | 0.1225 (12.25%) |
+| 4 | **Fwd Packet Length Mean** | 0.1121 (11.21%) |
+| 5 | **Fwd IAT Mean** | 0.0721 (7.21%) |
+| 6 | **Flow Packets/s** | 0.0639 (6.39%) |
+| 7 | **Total Fwd Packets** | 0.0624 (6.24%) |
+| 8 | **Flow Bytes/s** | 0.0575 (5.75%) |
+| 9 | **Flow Duration** | 0.0526 (5.26%) |
+| 10 | **Flow IAT Mean** | 0.0476 (4.76%) |
+| 11 | **ACK Flag Count** | 0.0468 (4.68%) |
+| 12 | **Total Backward Packets** | 0.0453 (4.53%) |
+| 13 | **Bwd IAT Mean** | 0.0166 (1.66%) |
+| 14 | **Fwd PSH Flags** | 0.0023 (0.23%) |
+| 15 | **SYN Flag Count** | 0.0021 (0.21%) |
 
 ```
-Feature Importance Ranking (Higher = More Important)
+Feature Importance Ranking (from trained model)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Flow Duration          ████████████████████████████████████████  0.18
-Flow Bytes/s           ████████████████████████████████         0.15
-Total Fwd Packets      ██████████████████████████████           0.13
-Flow Packets/s         ████████████████████████                 0.11
-SYN Flag Count         ██████████████████████                   0.10
-Flow IAT Mean          ████████████████████                     0.09
-Fwd Packet Length Mean ██████████████████                       0.08
-Average Packet Size    ██████████████                           0.06
-Packet Length Variance ████████████                             0.05
-ACK Flag Count         ██████████                               0.04
-Bwd Packet Length Mean ████████                                 0.03
-Total Backward Packets ██████                                   0.03
-Fwd IAT Mean           ████                                     0.02
-Bwd IAT Mean           ████                                     0.02
-Fwd PSH Flags          ██                                       0.01
+Packet Length Variance ████████████████████████████████████████  16.40%
+Bwd Packet Length Mean ████████████████████████████████          13.21%
+Average Packet Size    ██████████████████████████████            12.25%
+Fwd Packet Length Mean ████████████████████████████              11.21%
+Fwd IAT Mean           ██████████████████                         7.21%
+Flow Packets/s         ████████████████                           6.39%
+Total Fwd Packets      ███████████████                            6.24%
+Flow Bytes/s           ██████████████                             5.75%
+Flow Duration          █████████████                              5.26%
+Flow IAT Mean          ████████████                               4.76%
+ACK Flag Count         ███████████                                4.68%
+Total Backward Packets ███████████                                4.53%
+Bwd IAT Mean           ████                                       1.66%
+Fwd PSH Flags          █                                          0.23%
+SYN Flag Count         █                                          0.21%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+> **Key Insight:** Packet size features (variance, mean) are the most important, followed by timing features. TCP flags (SYN, PSH) have surprisingly low importance in this dataset.
 
 ### 3.5 Why Each Feature Was Chosen
 
@@ -773,30 +1218,97 @@ Where:
 - FP = False Positive (normal flagged as attack)
 - FN = False Negative (attack missed)
 
-### 6.2 Expected Performance
+### 6.2 Real Evaluation Results (CICIDS2017 Dataset)
 
-| Model | Accuracy | Precision | Recall | Notes |
-|-------|----------|-----------|--------|-------|
-| **Statistical** | 65-75% | 60-70% | 70-80% | Fast, many false positives |
-| **Isolation Forest** | 75-85% | 70-80% | 75-85% | Better balance |
-| **Combined (Stat+IF)** | 78-88% | 72-82% | 80-90% | Best detection rate |
-| **Classifier** | 92-98% | 90-96% | 88-95% | Per-class varies |
+> **Evaluation Date:** December 10, 2025  
+> **Dataset:** CICIDS2017 (100,000 samples)  
+> **Train/Test Split:** 80,000 / 20,000 (stratified)
 
-### 6.3 Confusion Matrix Example
+#### Anomaly Detection Models (Binary Classification)
+
+| Model | Accuracy | Precision | Recall | F1 Score | Specificity | ROC AUC |
+|-------|----------|-----------|--------|----------|-------------|--------|
+| **Statistical (Z-score)** | 76.71% | 42.14% | 48.29% | 45.01% | 83.70% | 0.688 |
+| **Isolation Forest** | 80.97% | 52.05% | 45.07% | 48.31% | 89.79% | 0.724 |
+| **Combined (OR)** | 76.54% | 41.83% | 48.29% | 44.83% | 83.49% | 0.688 |
+
+#### Attack Classifier (Multi-class Classification)
+
+| Metric | Value |
+|--------|-------|
+| **Overall Accuracy** | 98.35% |
+| **Weighted Precision** | 98.31% |
+| **Weighted Recall** | 98.35% |
+| **Weighted F1 Score** | 98.30% |
+| **Macro Precision** | 67.51% |
+| **Macro Recall** | 60.88% |
+| **Macro F1 Score** | 62.77% |
+
+### 6.3 Confusion Matrices (Real Data)
+
+#### Statistical Detector Confusion Matrix
 
 ```
                     PREDICTED
               ┌─────────┬─────────┐
               │ Normal  │ Attack  │
      ─────────┼─────────┼─────────┤
-     Normal   │  TN     │   FP    │   ← False Alarm
-A    ─────────┼─────────┼─────────┤
-C    Attack   │  FN     │   TP    │
-T             └─────────┴─────────┘
-U                  ↑
-A            Missed Attack
-L
+     Normal   │ 13,436  │  2,617  │   ← False Positives: 16.30%
+Actual ───────┼─────────┼─────────┤
+     Attack   │  2,041  │  1,906  │   ← Missed 51.71% of attacks
+              └─────────┴─────────┘
+
+ True Positives:  1,906   |   False Positives: 2,617
+ True Negatives: 13,436   |   False Negatives: 2,041
 ```
+
+#### Isolation Forest Confusion Matrix
+
+```
+                    PREDICTED
+              ┌─────────┬─────────┐
+              │ Normal  │ Attack  │
+     ─────────┼─────────┼─────────┤
+     Normal   │ 14,414  │  1,639  │   ← False Positives: 10.21%
+Actual ───────┼─────────┼─────────┤
+     Attack   │  2,168  │  1,779  │   ← Missed 54.93% of attacks
+              └─────────┴─────────┘
+
+ True Positives:  1,779   |   False Positives: 1,639
+ True Negatives: 14,414   |   False Negatives: 2,168
+```
+
+### 6.4 Attack Classifier Per-Class Performance
+
+| Attack Category | Precision | Recall | F1 Score | Support (Test) |
+|-----------------|-----------|--------|----------|----------------|
+| **Normal** | 99.29% | 98.66% | 98.98% | 16,053 |
+| **Port Scan** | 99.47% | 99.64% | 99.55% | 1,122 |
+| **DDoS Attack** | 99.46% | 99.14% | 99.30% | 931 |
+| **DoS Attack** | 89.76% | 97.39% | 93.42% | 1,764 |
+| **Brute Force** | 92.11% | 72.16% | 80.92% | 97 |
+| **Botnet** | 60.00% | 20.00% | 30.00% | 15 |
+| **Heartbleed** | 0.00% | 0.00% | 0.00% | 1 |
+| **Unknown Attack** | 0.00% | 0.00% | 0.00% | 17 |
+
+> **Note:** Low performance on Heartbleed and Unknown Attack is due to extremely small sample sizes (1 and 17 samples respectively in test set).
+
+### 6.5 Per-Attack Type Detection Rates (Combined Detector)
+
+| Attack Type | Total in Test | Detected | Detection Rate |
+|-------------|---------------|----------|----------------|
+| **DoS GoldenEye** | 81 | 60 | 74.07% |
+| **DoS Hulk** | 1,611 | 1,185 | 73.57% |
+| **DoS Slowloris** | 36 | 24 | 66.67% |
+| **DDoS** | 931 | 584 | 62.73% |
+| **FTP-Patator** | 50 | 24 | 48.00% |
+| **DoS Slowhttptest** | 36 | 17 | 47.22% |
+| **Heartbleed** | 1 | 1 | 100.00% |
+| **PortScan** | 1,122 | 11 | 0.98% | ⚠️ Low detection |
+| **Bot** | 15 | 0 | 0.00% | ⚠️ Missed |
+| **SSH-Patator** | 47 | 0 | 0.00% | ⚠️ Missed |
+| **Web Attack** | 17 | 0 | 0.00% | ⚠️ Missed |
+| **BENIGN (False Alarms)** | 16,053 | 2,651 | 16.51% |
 
 ---
 

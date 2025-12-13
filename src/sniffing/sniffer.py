@@ -1,5 +1,6 @@
 """
 Background service for packet sniffing and flow aggregation.
+Optimized for extreme traffic conditions (4000+ pps flood attacks).
 """
 import threading
 import time
@@ -13,10 +14,15 @@ from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Memory limits to prevent crashes under heavy traffic
-MAX_QUEUE_SIZE = 10000  # Maximum packets in queue before dropping
-MAX_ACTIVE_FLOWS = 5000  # Maximum concurrent flows to track
-MAX_PACKETS_PER_FLOW = 1000  # Maximum packets per individual flow
+# AGGRESSIVE memory limits for flood attack survival
+MAX_QUEUE_SIZE = 500  # Reduced from 10000 - small queue, fast processing
+MAX_ACTIVE_FLOWS = 1000  # Reduced from 5000
+MAX_PACKETS_PER_FLOW = 100  # Reduced from 1000
+
+# Adaptive sampling - when traffic is heavy, skip packets
+SAMPLE_RATE_NORMAL = 1  # Process every packet when traffic is light
+SAMPLE_RATE_HEAVY = 10  # Process 1 in 10 packets when under attack
+HEAVY_TRAFFIC_THRESHOLD = 1000  # packets/sec threshold for heavy mode
 
 
 class SnifferService:
@@ -28,11 +34,19 @@ class SnifferService:
         self.feature_extractor = FeatureExtractor(max_packets_per_flow=MAX_PACKETS_PER_FLOW)
         self.stats = {
             "packets_captured": 0,
+            "packets_seen": 0,
             "active_flows": 0,
-            "packets_dropped": 0
+            "packets_dropped": 0,
+            "sample_rate": SAMPLE_RATE_NORMAL,
+            "mode": "normal"
         }
         self.stop_event = threading.Event()
         self.ignored_ip = None
+        
+        # Packet counter for sampling
+        self._packet_counter = 0
+        self._last_rate_check = time.time()
+        self._packets_since_check = 0
 
     def start(self, interface: str = None, exclude_local: bool = True):
         """Start the sniffing service."""
@@ -41,6 +55,9 @@ class SnifferService:
             
         self.is_running = True
         self.stop_event.clear()
+        self._packet_counter = 0
+        self._last_rate_check = time.time()
+        self._packets_since_check = 0
         
         # Determine local IP to exclude
         if exclude_local:
@@ -58,6 +75,9 @@ class SnifferService:
         # Start packet processing thread
         threading.Thread(target=self._process_packets, daemon=True).start()
         
+        # Start rate monitoring thread
+        threading.Thread(target=self._monitor_rate, daemon=True).start()
+        
         # Start sniffing thread
         self.sniffer_thread = threading.Thread(
             target=self._sniff_loop,
@@ -72,12 +92,44 @@ class SnifferService:
         self.is_running = False
         self.stop_event.set()
         logger.info("Sniffer stopped")
+    
+    def _monitor_rate(self):
+        """Monitor packet rate and adjust sampling dynamically."""
+        while self.is_running:
+            time.sleep(1.0)  # Check every second
+            
+            current_time = time.time()
+            elapsed = current_time - self._last_rate_check
+            
+            if elapsed >= 1.0:
+                rate = self._packets_since_check / elapsed
+                
+                # Adaptive sampling based on traffic rate
+                if rate > HEAVY_TRAFFIC_THRESHOLD:
+                    self.stats["sample_rate"] = SAMPLE_RATE_HEAVY
+                    self.stats["mode"] = "heavy_traffic"
+                else:
+                    self.stats["sample_rate"] = SAMPLE_RATE_NORMAL
+                    self.stats["mode"] = "normal"
+                
+                self._last_rate_check = current_time
+                self._packets_since_check = 0
 
     def _sniff_loop(self, interface):
-        """Main Scapy sniffing loop."""
+        """Main Scapy sniffing loop with packet sampling."""
         try:
-            def safe_enqueue(pkt):
-                """Safely add packet to queue, dropping if full."""
+            def sampled_enqueue(pkt):
+                """Sample packets to prevent overwhelming under flood."""
+                self._packets_since_check += 1
+                self._packet_counter += 1
+                self.stats["packets_seen"] = self._packet_counter
+                
+                # Sample based on current rate
+                sample_rate = self.stats["sample_rate"]
+                if sample_rate > 1 and (self._packet_counter % sample_rate) != 0:
+                    # Skip this packet (sampling)
+                    return
+                
                 try:
                     self.packet_queue.put_nowait(pkt)
                 except queue.Full:
@@ -87,7 +139,7 @@ class SnifferService:
             # Filter for IP traffic only
             sniff(
                 iface=interface,
-                prn=safe_enqueue,
+                prn=sampled_enqueue,
                 store=False,
                 stop_filter=lambda x: not self.is_running,
                 filter="ip"
@@ -102,7 +154,8 @@ class SnifferService:
         
         while self.is_running or not self.packet_queue.empty():
             try:
-                pkt = self.packet_queue.get(timeout=1.0)
+                # Shorter timeout for faster response
+                pkt = self.packet_queue.get(timeout=0.5)
                 
                 # Filter excluded IP
                 if self.ignored_ip and IP in pkt:
@@ -118,9 +171,10 @@ class SnifferService:
                 self.stats["packets_captured"] += 1
                 self.stats["active_flows"] = len(self.feature_extractor.active_flows)
                 
-                # Periodic cleanup every 1000 packets
+                # More frequent cleanup during heavy traffic
                 cleanup_counter += 1
-                if cleanup_counter >= 1000:
+                cleanup_interval = 100 if self.stats["mode"] == "heavy_traffic" else 500
+                if cleanup_counter >= cleanup_interval:
                     self._cleanup_old_flows()
                     cleanup_counter = 0
                     
@@ -143,9 +197,14 @@ class SnifferService:
             
             last_time = packets[-1].time
             
-            # Remove flows that haven't had activity for 30 seconds
-            # or if force cleanup (at limit), remove flows older than 10 seconds
-            timeout = 10 if force else 30
+            # Shorter timeouts during heavy traffic
+            if force:
+                timeout = 5  # Very aggressive: 5 seconds
+            elif self.stats["mode"] == "heavy_traffic":
+                timeout = 10  # Aggressive: 10 seconds
+            else:
+                timeout = 30  # Normal: 30 seconds
+                
             if (current_time - last_time) > timeout:
                 keys_to_remove.append(key)
         
@@ -157,7 +216,7 @@ class SnifferService:
             if key in self.feature_extractor.flow_last_packet_time:
                 del self.feature_extractor.flow_last_packet_time[key]
 
-    def get_flows(self, timeout_seconds=5.0) -> List[Dict]:
+    def get_flows(self, timeout_seconds=2.0) -> List[Dict]:
         """
         Get completed flows or flows active longer than timeout.
         Returns list of feature dictionaries ready for model.
@@ -165,11 +224,17 @@ class SnifferService:
         current_time = time.time()
         ready_flows = []
         
+        # Limit how many flows we return per call to prevent API blocking
+        MAX_FLOWS_RETURN = 20
+        
         # Convert timestamp keys to list to avoid runtime error during iteration
         keys = list(self.feature_extractor.active_flows.keys())
         
         for key in keys:
-            packets = self.feature_extractor.active_flows[key]
+            if len(ready_flows) >= MAX_FLOWS_RETURN:
+                break  # Stop early if we have enough
+                
+            packets = self.feature_extractor.active_flows.get(key)
             if not packets:
                 continue
                 
@@ -177,14 +242,18 @@ class SnifferService:
             last_time = packets[-1].time
             duration = last_time - start_time
             
+            # Shorter timeout during heavy traffic
+            effective_timeout = 1.0 if self.stats["mode"] == "heavy_traffic" else timeout_seconds
+            
             # If flow is long enough or hasn't updated recently, process it
-            if duration > timeout_seconds or (current_time - last_time) > 2.0:
+            if duration > effective_timeout or (current_time - last_time) > 1.0:
                 features = self.feature_extractor.extract_features(key, packets)
                 if features:
                     ready_flows.append(features)
                 
                 # Reset/Remove processed flows to prevent infinite growth
-                del self.feature_extractor.active_flows[key]
+                if key in self.feature_extractor.active_flows:
+                    del self.feature_extractor.active_flows[key]
                 if key in self.feature_extractor.flow_start_times:
                     del self.feature_extractor.flow_start_times[key]
         

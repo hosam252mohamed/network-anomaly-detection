@@ -1,0 +1,424 @@
+{
+  "timestamp": "2025-12-10T19:57:13.619407",
+  "dataset": {
+    "original_records": 2830743,
+    "used_records": 2830743,
+    "features_available": 79,
+    "features_selected": 15,
+    "label_distribution": {
+      "BENIGN": 2273097,
+      "DoS Hulk": 231073,
+      "PortScan": 158930,
+      "DDoS": 128027,
+      "DoS GoldenEye": 10293,
+      "FTP-Patator": 7938,
+      "SSH-Patator": 5897,
+      "DoS slowloris": 5796,
+      "DoS Slowhttptest": 5499,
+      "Bot": 1966,
+      "Web Attack \ufffd Brute Force": 1507,
+      "Web Attack \ufffd XSS": 652,
+      "Infiltration": 36,
+      "Web Attack \ufffd Sql Injection": 21,
+      "Heartbleed": 11
+    },
+    "attack_types_count": 15,
+    "benign_count": 2273097,
+    "attack_count": 557646,
+    "attack_ratio": 0.19699633629757277
+  },
+  "preprocessing": {
+    "records_after_cleaning": 2830743,
+    "records_removed": 0,
+    "train_size": 2264594,
+    "test_size": 566149,
+    "train_attack_ratio": 0.19699645940950122,
+    "test_attack_ratio": 0.19699584385029384,
+    "features_used": [
+      "Flow Duration",
+      "Total Fwd Packets",
+      "Total Backward Packets",
+      "Flow Bytes/s",
+      "Flow Packets/s",
+      "Fwd Packet Length Mean",
+      "Bwd Packet Length Mean",
+      "Flow IAT Mean",
+      "Fwd IAT Mean",
+      "Bwd IAT Mean",
+      "Fwd PSH Flags",
+      "SYN Flag Count",
+      "ACK Flag Count",
+      "Packet Length Variance",
+      "Average Packet Size"
+    ]
+  },
+  "statistical_detector": {
+    "stat_accuracy": 0.7677307563909854,
+    "stat_precision": 0.4220068112228957,
+    "stat_recall": 0.4844210922719651,
+    "stat_f1_score": 0.45106510876507494,
+    "stat_confusion_matrix": [
+      [
+        380623,
+        73997
+      ],
+      [
+        57502,
+        54027
+      ]
+    ],
+    "stat_true_positives": 54027,
+    "stat_true_negatives": 380623,
+    "stat_false_positives": 73997,
+    "stat_false_negatives": 57502,
+    "stat_specificity": 0.8372332937398267,
+    "stat_false_positive_rate": 0.16276670626017334,
+    "stat_false_negative_rate": 0.5155789077280348,
+    "stat_roc_auc": 0.6880986200480302,
+    "threshold": 3.0,
+    "training_samples": 1818477
+  },
+  "isolation_forest": {
+    "iso_accuracy": 0.8109543600712886,
+    "iso_precision": 0.5234933659035629,
+    "iso_recall": 0.44963193429511605,
+    "iso_f1_score": 0.4837595624198107,
+    "iso_confusion_matrix": [
+      [
+        408974,
+        45646
+      ],
+      [
+        61382,
+        50147
+      ]
+    ],
+    "iso_true_positives": 50147,
+    "iso_true_negatives": 408974,
+    "iso_false_positives": 45646,
+    "iso_false_negatives": 61382,
+    "iso_specificity": 0.8995952663763143,
+    "iso_false_positive_rate": 0.10040473362368571,
+    "iso_false_negative_rate": 0.550368065704884,
+    "iso_roc_auc": 0.7315576379017584,
+    "contamination": 0.1,
+    "n_estimators": 100,
+    "training_samples": 1818477
+  },
+  "combined_detection": {
+    "combined_accuracy": 0.7661604983847008,
+    "combined_precision": 0.41912044109778135,
+    "combined_recall": 0.48459145155071776,
+    "combined_f1_score": 0.4494843646041251,
+    "combined_confusion_matrix": [
+      [
+        379715,
+        74905
+      ],
+      [
+        57483,
+        54046
+      ]
+    ],
+    "combined_true_positives": 54046,
+    "combined_true_negatives": 379715,
+    "combined_false_positives": 74905,
+    "combined_false_negatives": 57483,
+    "combined_specificity": 0.8352360212925081,
+    "combined_false_positive_rate": 0.16476397870749196,
+    "combined_false_negative_rate": 0.5154085484492823,
+    "combined_roc_auc": 0.6880986200480302
+  },
+  "attack_classifier": {
+    "accuracy": 0.9857069428719295,
+    "n_estimators": 100,
+    "max_depth": 20,
+    "classes": [
+      "Botnet",
+      "Brute Force",
+      "DDoS Attack",
+      "DoS Attack",
+      "Heartbleed",
+      "Infiltration",
+      "Normal",
+      "Port Scan",
+      "Unknown Attack"
+    ],
+    "training_samples": 2264594,
+    "classification_report": {
+      "Botnet": {
+        "precision": 0.8486486486486486,
+        "recall": 0.4005102040816326,
+        "f1-score": 0.5441941074523396,
+        "support": 392.0
+      },
+      "Brute Force": {
+        "precision": 0.9986098239110287,
+        "recall": 0.7729555236728838,
+        "f1-score": 0.8714112414071977,
+        "support": 2788.0
+      },
+      "DDoS Attack": {
+        "precision": 0.9984072102870907,
+        "recall": 0.9984072102870907,
+        "f1-score": 0.9984072102870907,
+        "support": 25741.0
+      },
+      "DoS Attack": {
+        "precision": 0.9044775018894358,
+        "recall": 0.9738800785979398,
+        "f1-score": 0.9378966281825828,
+        "support": 50383.0
+      },
+      "Heartbleed": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 2.0
+      },
+      "Infiltration": {
+        "precision": 1.0,
+        "recall": 0.7777777777777778,
+        "f1-score": 0.875,
+        "support": 9.0
+      },
+      "Normal": {
+        "precision": 0.9941897784368844,
+        "recall": 0.988000967841274,
+        "f1-score": 0.991085711763992,
+        "support": 454620.0
+      },
+      "Port Scan": {
+        "precision": 0.9934315473397767,
+        "recall": 0.9993706931814607,
+        "f1-score": 0.9963922700464299,
+        "support": 31781.0
+      },
+      "Unknown Attack": {
+        "precision": 0.9347826086956522,
+        "recall": 0.09930715935334873,
+        "f1-score": 0.17954070981210857,
+        "support": 433.0
+      },
+      "accuracy": 0.9857069428719295,
+      "macro avg": {
+        "precision": 0.9636163465787241,
+        "recall": 0.7789121794214897,
+        "f1-score": 0.821547542105749,
+        "support": 566149.0
+      },
+      "weighted avg": {
+        "precision": 0.9862309222229071,
+        "recall": 0.9857069428719295,
+        "f1-score": 0.9854617946737128,
+        "support": 566149.0
+      }
+    },
+    "confusion_matrix": [
+      [
+        157,
+        0,
+        0,
+        0,
+        0,
+        0,
+        235,
+        0,
+        0
+      ],
+      [
+        0,
+        2155,
+        0,
+        1,
+        0,
+        0,
+        632,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        25700,
+        0,
+        0,
+        0,
+        41,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        49067,
+        0,
+        0,
+        1314,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        7,
+        2,
+        0,
+        0
+      ],
+      [
+        28,
+        3,
+        41,
+        5172,
+        0,
+        0,
+        449165,
+        208,
+        3
+      ],
+      [
+        0,
+        0,
+        0,
+        9,
+        0,
+        0,
+        11,
+        31761,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        390,
+        0,
+        43
+      ]
+    ],
+    "confusion_matrix_labels": [
+      "Botnet",
+      "Brute Force",
+      "DDoS Attack",
+      "DoS Attack",
+      "Heartbleed",
+      "Infiltration",
+      "Normal",
+      "Port Scan",
+      "Unknown Attack"
+    ]
+  },
+  "feature_importance": {
+    "Packet Length Variance": 0.15788371870982437,
+    "Average Packet Size": 0.1374364620297753,
+    "Bwd Packet Length Mean": 0.1332340126848737,
+    "Fwd Packet Length Mean": 0.1135858190803408,
+    "Fwd IAT Mean": 0.06731848228022423,
+    "Flow Packets/s": 0.06337931185817536,
+    "Total Fwd Packets": 0.06040850190064217,
+    "Flow Bytes/s": 0.05989071424374856,
+    "Flow Duration": 0.05035944822197885,
+    "Flow IAT Mean": 0.045120186546751435,
+    "ACK Flag Count": 0.04352470914647088,
+    "Total Backward Packets": 0.04276801128468369,
+    "Bwd IAT Mean": 0.019963978250241914,
+    "Fwd PSH Flags": 0.0035969937131699447,
+    "SYN Flag Count": 0.001529650049098987
+  },
+  "per_attack_metrics": {
+    "DoS Hulk": {
+      "total": 46076,
+      "detected": 33905,
+      "detection_rate": 0.7358494660994878
+    },
+    "BENIGN": {
+      "total": 454620,
+      "detected": 74905,
+      "detection_rate": 0.16476397870749196
+    },
+    "PortScan": {
+      "total": 31781,
+      "detected": 216,
+      "detection_rate": 0.006796513640225292
+    },
+    "DDoS": {
+      "total": 25741,
+      "detected": 16351,
+      "detection_rate": 0.635212307214172
+    },
+    "FTP-Patator": {
+      "total": 1598,
+      "detected": 828,
+      "detection_rate": 0.5181476846057572
+    },
+    "SSH-Patator": {
+      "total": 1190,
+      "detected": 6,
+      "detection_rate": 0.005042016806722689
+    },
+    "DoS Slowhttptest": {
+      "total": 1080,
+      "detected": 434,
+      "detection_rate": 0.40185185185185185
+    },
+    "DoS slowloris": {
+      "total": 1146,
+      "detected": 725,
+      "detection_rate": 0.6326352530541012
+    },
+    "DoS GoldenEye": {
+      "total": 2081,
+      "detected": 1536,
+      "detection_rate": 0.7381066794810187
+    },
+    "Bot": {
+      "total": 392,
+      "detected": 12,
+      "detection_rate": 0.030612244897959183
+    },
+    "Web Attack \ufffd Brute Force": {
+      "total": 308,
+      "detected": 16,
+      "detection_rate": 0.05194805194805195
+    },
+    "Heartbleed": {
+      "total": 2,
+      "detected": 2,
+      "detection_rate": 1.0
+    },
+    "Infiltration": {
+      "total": 9,
+      "detected": 9,
+      "detection_rate": 1.0
+    },
+    "Web Attack \ufffd XSS": {
+      "total": 121,
+      "detected": 4,
+      "detection_rate": 0.03305785123966942
+    },
+    "Web Attack \ufffd Sql Injection": {
+      "total": 4,
+      "detected": 2,
+      "detection_rate": 0.5
+    }
+  }
+}

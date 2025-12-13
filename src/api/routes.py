@@ -98,8 +98,21 @@ def flow_to_array(flow) -> np.ndarray:
 async def detect_anomalies(request: DetectionRequest):
     """
     Detect anomalies in network flows.
+    Limited to 100 flows per request for performance.
     """
     global stats, alerts
+    
+    # Early return for empty requests
+    if not request.flows:
+        return DetectionResponse(
+            total=0,
+            anomalies=0,
+            results=[]
+        )
+    
+    # Limit batch size to prevent blocking
+    MAX_BATCH_SIZE = 100
+    flows_to_process = request.flows[:MAX_BATCH_SIZE]
     
     if not any(models.values()):
         raise HTTPException(
@@ -107,7 +120,7 @@ async def detect_anomalies(request: DetectionRequest):
             detail="Models not loaded. Please train models first."
         )
     
-    X = np.array([flow_to_array(flow) for flow in request.flows])
+    X = np.array([flow_to_array(flow) for flow in flows_to_process])
     
     if models['preprocessor']:
         try:
